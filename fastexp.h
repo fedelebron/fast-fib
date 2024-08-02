@@ -6,7 +6,7 @@ T fastexp_fib(int n) {
   T two = 2;  // wasteful
   unsigned mask = 1 << ((sizeof(int) * 8 - __builtin_clz(n)) - 1);
   while (mask != 1) {
-		// We have fk=f(k) and fk=f(k-1), and k becomes
+    // We have fk=f(k) and fk=f(k-1), and k becomes
     // either 2k or 2k+1, depending on n&1.
     // We have the equations:
     //
@@ -22,18 +22,18 @@ T fastexp_fib(int n) {
     T fktmp = fk;
     fk <<= 2;
     fk -= fkm1;
-		if (evenk) {
-			fk += two;
-		} else {
-			fk -= two;
-		}
+    if (evenk) {
+      fk += two;
+    } else {
+      fk -= two;
+    }
     // f2kp1 is now stored in fk
    
-		fkm1 += fktmp;  // fkm1 now holds f(2k-1) 
+    fkm1 += fktmp;  // fkm1 now holds f(2k-1) 
     if (!evenn) {
       // We need fk<-f(2k+1), fkm1<-f(2k).
       fkm1 = fk - fkm1;  // grossly inefficient
-      //fk = f2kp1;  // already true
+      // fk = f2kp1;  // already true
     } else {
       // We need fk<-f(2k), fkm1<-f(2k-1).
       // fkm1 = f2km1;  // already true
