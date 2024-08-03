@@ -1,5 +1,5 @@
 CXX=clang++
-CXXFLAGS=-O3 -std=c++2a -stdlib=libc++ -fexperimental-library
+CXXFLAGS=-O3 -std=c++2a -stdlib=libc++ -fexperimental-library -Wall -Wextra -pedantic -Wshadow 
 
 all: main
 
