@@ -1,5 +1,5 @@
 CXX=clang++
-CXXFLAGS=-O3 -std=c++2a -stdlib=libc++ -fexperimental-library -DLONG_MULTIPLICATION
+CXXFLAGS=-O3 -std=c++2a -stdlib=libc++ -fexperimental-library
 
 all: main
 
