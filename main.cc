@@ -9,7 +9,7 @@
 #include <sstream>
 
 void check() {
-  for (int i = 1; i < 1'000'000; i *= 10) {
+  for (int i = 1; i <= 1'000'000; i *= 10) {
     auto g = mpz_class(mpz_class::fibonacci(i)).get_str();
     std::ostringstream s;
     s << fastexp_fib<num<uint64_t>>(i);
@@ -28,6 +28,6 @@ void bench() {
 }
 
 int main() {
-  //check();
-  bench();
+  check();
+  //bench();
 }

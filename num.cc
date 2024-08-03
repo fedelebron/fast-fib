@@ -12,7 +12,7 @@
 #include <sstream>
 #include <string>
 
-#define KARATSUBA_THRESHOLD 50
+#define KARATSUBA_THRESHOLD 40
 
 std::ostream& operator<<(std::ostream& dest, __uint128_t value) {
   std::ostream::sentry s(dest);
@@ -79,6 +79,19 @@ std::string dump_limbs(LimbSpan<T> s) {
 }
 
 template <typename T>
+void shrink_limbs(std::vector<T>& v) {
+  int i = v.size();
+  while (--i >= 0) {
+    if (!v[i]) {
+      v.pop_back();
+      continue;
+    }
+    return;
+  }
+}
+
+
+template <typename T>
 bool add_limbs(LimbSpan<T> x, LimbSpan<const T> y, unsigned int shift = 0) {
   int m = y.size();
   bool carry = false;
@@ -97,6 +110,15 @@ bool add_limbs(LimbSpan<T> x, LimbSpan<const T> y, unsigned int shift = 0) {
     carry = ++x[j++] == 0;
   }
   return carry;
+}
+
+template <typename T>
+std::vector<T> add(LimbSpan<const T> x, LimbSpan<const T> y) {
+  std::vector<T> ret(x.begin(), x.end());
+  ret.resize(std::max(x.size(), y.size()) + 1);
+  assert (!add_limbs<T>(ret, y));
+  shrink_limbs(ret);
+  return ret;
 }
 
 template <typename T>
@@ -135,18 +157,6 @@ void sub_limbs(LimbSpan<T> x, LimbSpan<const T> y) {
       }
     }
     assert (found);
-  }
-}
-
-template <typename T>
-void shrink_limbs(std::vector<T>& v) {
-  int i = v.size();
-  while (--i >= 0) {
-    if (!v[i]) {
-      v.pop_back();
-      continue;
-    }
-    return;
   }
 }
 
@@ -202,7 +212,7 @@ int num<T>::chunk_bits() {
 template <typename T>
 num<T>& num<T>::operator+=(const num<T>& other) {
   chunks.resize(std::max(size(), other.size()));
-  if (add_limbs(std::span{chunks}, std::span{other.chunks})) {
+  if (add_limbs<T>(chunks, other.chunks)) {
     chunks.push_back(1);
   }
   return *this;
@@ -221,7 +231,7 @@ void num<T>::shrink() {
 template <typename T>
 num<T>& num<T>::sub(const num<T>& other) {
   // assumes self >= other
-  sub_limbs(std::span{chunks}, std::span<const T>{other.chunks});
+  sub_limbs<T>(chunks, other.chunks);
   shrink();
   return *this;
 }
@@ -270,16 +280,13 @@ std::vector<T> mul(std::span<const T> a, std::span<const T> b);
 template <typename T>
 std::vector<T> long_multiplication(std::span<const T> a, std::span<const T> b) {
   std::vector<T> new_limbs(a.size() + b.size() + 1);
-  mac3(std::span{new_limbs}, a, b);
+  mac3<T>(new_limbs, a, b);
   shrink_limbs(new_limbs);
   return new_limbs;
 }
 
 template <typename T>
 std::vector<T> karatsuba(std::span<const T> a, std::span<const T> b) {
-  if (a.size() < b.size()) {
-    std::swap(a, b);
-  }
   // b is shorter or equal in length to a.
   int llen = b.size() / 2;
   auto a0 = a.subspan(0, llen);
@@ -290,27 +297,20 @@ std::vector<T> karatsuba(std::span<const T> a, std::span<const T> b) {
   auto z0 = mul(a0, b0);
   auto z2 = mul(a1, b1);
 
-  // this code sucks, this needs a much better API
-  std::vector<T> tmp1(a0.begin(), a0.end());
-  tmp1.resize(std::max(tmp1.size(), a1.size()) + 1);
-  add_limbs(std::span{tmp1}, a1);
-  shrink_limbs(tmp1);
-  
-  std::vector<T> z3(b0.begin(), b0.end());
-  z3.resize(std::max(z3.size(), b1.size()) + 1);
-  add_limbs(std::span{z3}, b1);
-  shrink_limbs(z3);
-  z3 = mul(std::span<const T>{z3},
-           std::span<const T>{tmp1});  // p3 = (a0 + a1) * (b0 + b1)
-  sub_limbs(std::span{z3}, std::span<const T>{z0});
-  sub_limbs(std::span{z3}, std::span<const T>{z2});
+  auto tmp = add(a0, a1);
+  auto z3 = add(b0, b1);
+  z3 = mul<T>(z3, tmp);  // z3 = (a0 + a1) * (b0 + b1)
+  sub_limbs<T>(z3, z0);
+  sub_limbs<T>(z3, z2);
 
   int rsize =
-      2 + std::max(z0.size(), std::max(z3.size() + llen, z2.size() + 2 * llen));
+      2 + std::max(z0.size(),
+            std::max(z3.size() + llen,
+                     z2.size() + 2 * llen));
   std::vector<T> result(z0);
   result.resize(rsize);
-  add_limbs(std::span{result}, std::span<const T>{z3}, llen);
-  add_limbs(std::span{result}, std::span<const T>{z2}, 2 * llen);
+  add_limbs<T>(result, z3, llen);
+  add_limbs<T>(result, z2, 2 * llen);
 
   shrink_limbs(result);
 
@@ -319,7 +319,10 @@ std::vector<T> karatsuba(std::span<const T> a, std::span<const T> b) {
 
 template <typename T>
 std::vector<T> mul(std::span<const T> a, std::span<const T> b) {
-  int minlen = std::min(a.size(), b.size());
+  if (a.size() < b.size()) {
+    std::swap(a, b);
+  }
+  int minlen = b.size();
   if (minlen < KARATSUBA_THRESHOLD) {
     return long_multiplication(a, b);
   } else {
@@ -329,17 +332,13 @@ std::vector<T> mul(std::span<const T> a, std::span<const T> b) {
 
 template <typename T>
 num<T>& num<T>::operator*=(const num<T>& other) {
-  auto a = std::span<const T>{chunks};
-  auto b = std::span<const T>{other.chunks};
-  chunks = mul(a, b);
+  chunks = mul<T>(chunks, other.chunks);
   return *this;
 }
 
 template <typename T>
 std::strong_ordering operator<=>(const num<T>& a, const num<T>& b) {
-  auto as = std::span<const T>{a.chunks};
-  auto bs = std::span<const T>{b.chunks};
-  return cmp_limbs(as, bs);
+  return cmp_limbs<T>(a.chunks, b.chunks);
 }
 
 template <typename T>
@@ -417,7 +416,7 @@ num<T>::num(std::string_view v) {
 
 template <typename T>
 std::string num<T>::dump() const {
-  return dump_limbs(std::span<const T>{chunks});
+  return dump_limbs<const T>(chunks);
 }
 
 template <typename T>
