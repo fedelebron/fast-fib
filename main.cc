@@ -7,9 +7,10 @@
 #include <gmp.h>
 #include <gmpxx.h>
 #include <sstream>
+#include <span>
 
 void check() {
-  for (int i = 1; i <= 1'000'000; i *= 10) {
+  for (int i = 1; i <= 10'000'000; i *= 10) {
     auto g = mpz_class(mpz_class::fibonacci(i)).get_str();
     std::ostringstream s;
     s << fastexp_fib<num<uint64_t>>(i);
@@ -18,6 +19,7 @@ void check() {
       std::cerr << "Failed for i = " << i << ", GMP says:\n"
                 << g << "\nI say:\n"
                 << f << std::endl;
+      return;
     } else { std::cout << "Passed check for " << i << std::endl; }
   }
 
@@ -28,6 +30,6 @@ void bench() {
 }
 
 int main() {
-  //check();
-  bench();
+  check();
+  //bench();
 }

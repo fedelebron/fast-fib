@@ -11,6 +11,7 @@
 #include <span>
 #include <sstream>
 #include <string>
+#include <ostream>
 
 #define KARATSUBA_THRESHOLD 100
 
@@ -56,16 +57,6 @@ using DoubleLimb =
     std::conditional_t<2 * sizeof(T) <= sizeof(unsigned), unsigned,
                        std::conditional_t<2 * sizeof(T) <= sizeof(uint64_t),
                                           uint64_t, __uint128_t>>;
-
-template <typename T>
-std::string show_limbs(LimbSpan<T> s) {
-  std::ostringstream ss;
-  num<std::remove_const_t<T>> x;
-  x.chunks.assign(s.begin(), s.end());
-  ss << x;
-  return ss.str();
-}
-
 template <typename T>
 std::string dump_limbs(LimbSpan<T> s) {
   std::ostringstream o;
@@ -78,11 +69,122 @@ std::string dump_limbs(LimbSpan<T> s) {
   return o.str();
 }
 
+template<typename T>
+std::pair<T, T> div(T hi, T lo, T denom) {
+  DoubleLimb<T> n = hi;
+  n <<= sizeof(T) * 8;
+  n += lo;
+  return {n / denom, n % denom};
+}
+
+template<typename T>
+std::pair<T, T> divpow10(T hi, T lo) {
+  T d = max_pow_10_in_bytes[sizeof(T)];
+  return div(hi, lo, d); 
+}
+
+template<>
+std::pair<uint64_t, uint64_t> divpow10(uint64_t hi, uint64_t lo) {
+  // The magic constant is an approximation to the reciprocal of
+  // 10^19, obtained using the algorithms in https://gmplib.org/~tege/division-paper.pdf
+  // 10^19 in turn is the largest power of 10 that fits in a 64-bit
+  // unsigned int, which is an efficient representation choice for
+  // limbs.
+  uint64_t d = 10000000000000000000ull;
+  uint64_t v = 15581492618384294730ull;
+	__uint128_t p = __uint128_t(v) * hi;
+	uint64_t q1 = p >> 64;
+	uint64_t q0 = p;
+	q0 = q0 + lo;
+	q1 = q1 + hi + (q0 < lo);
+	q1++;
+	uint64_t r = lo - uint64_t(q1 * d);
+
+	q1 = (r > q0) ? q1 - 1 : q1;
+	r = (r > q0) ? r + d : r;
+
+	if (r >= d) {
+		q1++;
+		r -= d;
+	}
+
+	return {q1, r};
+}
+
+
+// Returns remainder.
+// Modifies numerator to write quotient.
+template <typename T>
+T quot_rem_by_single_limb(std::span<T> numerator,
+                          T denominator) {
+  int n = numerator.size();
+  // assert(m >= n - 1);
+  T remainder_hi = 0;
+	for (int i = n - 1; i >= 0; --i) {
+    std::tie(numerator[i], remainder_hi) =
+      div(remainder_hi, numerator[i], denominator);
+  }
+  return remainder_hi;
+}
+
+// Returns remainder.
+// Modifies numerator to write quotient.
+template <typename T>
+T quot_rem_by_pow10(std::span<T> numerator) {
+  int n = numerator.size();
+  // assert(m >= n - 1);
+  T remainder_hi = 0;
+	for (int i = n - 1; i >= 0; --i) {
+    std::tie(numerator[i], remainder_hi) =
+      divpow10(remainder_hi, numerator[i]);
+  }
+  return remainder_hi;
+}
+
 template <typename T>
 void shrink_limbs(std::vector<T>& v) {
   int i = v.size() - 1;
   while (i >= 0 && v[i] == 0) --i;
   v.erase(v.begin() + i + 1, v.end());
+}
+
+
+template <typename T>
+std::string show_limbs(LimbSpan<T> s) {
+  std::ostringstream ss;
+  return display_limbs_to_ostream<T>(ss, s).str();
+}
+
+template <typename T>
+std::ostream& display_limbs_to_ostream(std::ostream& o, std::span<const T> s) {
+  if (s.empty()) {
+    o << '0';
+    return o;
+  }
+  //std::cerr << "Started to display..." << std::endl;
+  std::ostream_iterator<char> oit(o, "");
+  std::vector<T> q(s.begin(), s.end());
+  std::vector<T> digit_chunks;
+  digit_chunks.reserve(s.size());
+  T d = max_pow_10_in_bytes[sizeof(T)];
+  while (q.size() > 1 || (q.size() == 1 && q[0] >= d)) {
+    digit_chunks.push_back(quot_rem_by_pow10<T>(q));
+    if (q[q.size() - 1] == 0) q.pop_back();
+  }
+  if (q.size()) digit_chunks.push_back(q[0]);
+  //std::cerr << "Done creating chunks..." << std::endl;
+  int n = digit_chunks.size();
+  int i = n;
+  while (--i >= 0) {
+    if (i == n - 1) {
+      // The first chunk is not zero-padded.
+      o << digit_chunks[i];
+    } else {
+      std::vformat_to(oit, fmt_str[sizeof(T)], std::make_format_args(digit_chunks[i]));
+    }
+  }
+  //std::cerr << "Done stringifying." << std::endl;
+  return o;
 }
 
 
@@ -157,23 +259,7 @@ void sub_limbs(LimbSpan<T> x, LimbSpan<const T> y) {
 
 template <typename T>
 std::ostream& operator<<(std::ostream& o, const num<T>& w) {
-  if (w.chunks.empty()) {
-    o << '0';
-    return o;
-  }
-  std::string buf;
-  num<T> d = {{T(max_pow_10_in_bytes[sizeof(T)])}};
-  auto x = w;
-  while (x >= d) {
-    auto [q, r] = x.quot_rem(d);
-
-    T val = r.size() ? r.chunks[0] : 0;
-    buf = std::vformat(fmt_str[sizeof(T)], std::make_format_args(val)) + buf;
-    x = q;
-  }
-  if (x.size()) buf = std::to_string(x.chunks[0]) + buf;
-  o << buf;
-  return o;
+  return display_limbs_to_ostream<T>(o, w.chunks);
 }
 
 template <typename T>
