@@ -24,10 +24,10 @@ void check() {
 }
 
 void bench() {
-	fastexp_fib<num<uint64_t>>(11'000'000);
+  fastexp_fib<num<uint64_t>>(11'300'000);
 }
 
 int main() {
-  check();
-  //bench();
+  //check();
+  bench();
 }

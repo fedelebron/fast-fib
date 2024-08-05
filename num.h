@@ -9,7 +9,7 @@
 template<typename T = uint64_t>
 struct num {
   using chunk_t = T;
-  num();
+  num() = default;
   num(T);
   num(std::string_view);
   template<typename TT>

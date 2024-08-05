@@ -1,5 +1,6 @@
 CXX=clang++
-CXXFLAGS=-O3 -std=c++2a -stdlib=libc++ -fexperimental-library -Wall -Wextra -pedantic -Wshadow -Wfatal-errors 
+CXXFLAGS=-O3 -fomit-frame-pointer -march=native -std=c++2a -stdlib=libc++ -fexperimental-library -Wall -Wextra -pedantic -Wshadow -Wfatal-errors 
+#CXXFLAGS=-O0 -std=c++2a -stdlib=libc++ -fexperimental-library -Wall -Wextra -pedantic -Wshadow -Wfatal-errors -fsanitize=memory -fsanitize-memory-track-origins -g 
 
 all: main
 

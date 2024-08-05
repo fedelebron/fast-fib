@@ -12,7 +12,7 @@
 #include <sstream>
 #include <string>
 
-#define KARATSUBA_THRESHOLD 40
+#define KARATSUBA_THRESHOLD 100
 
 std::ostream& operator<<(std::ostream& dest, __uint128_t value) {
   std::ostream::sentry s(dest);
@@ -80,14 +80,9 @@ std::string dump_limbs(LimbSpan<T> s) {
 
 template <typename T>
 void shrink_limbs(std::vector<T>& v) {
-  int i = v.size();
-  while (--i >= 0) {
-    if (!v[i]) {
-      v.pop_back();
-      continue;
-    }
-    return;
-  }
+  int i = v.size() - 1;
+  while (i >= 0 && v[i] == 0) --i;
+  v.erase(v.begin() + i + 1, v.end());
 }
 
 
@@ -236,53 +231,81 @@ num<T>& num<T>::sub(const num<T>& other) {
   return *this;
 }
 
-// multiply-add with carry
-template <typename T>
-T mac(T a, T b, T c, DoubleLimb<T>& acc) {
-  acc += static_cast<DoubleLimb<T>>(a);
-  acc += static_cast<DoubleLimb<T>>(b) * static_cast<DoubleLimb<T>>(c);
-  T new_carry = static_cast<T>(acc);
-  acc >>= sizeof(T) * 8;
-  return new_carry;
-}
-
-// a += b * c
-template <typename T>
-void mac_limb(LimbSpan<T> a, LimbSpan<const T> b, T c) {
-  if (c == 0) return;
-  int n = b.size();
-  // assert (a.size() >= n + 2);
-
-  DoubleLimb<T> carry = 0;
-  for (int i = 0; i < n; ++i) {
-    a[i] = mac(a[i], b[i], c, carry);
-  }
-
-  const T final_carry = carry;
-  assert((carry >> (sizeof(T) * 8)) == 0);
-  assert(add_limbs(a, {&final_carry, 1}, n) == 0);
-  // assert (add_limbs(a.subspan(n), {&final_carry, 1}) == 0);
-}
-
-template <typename T>
-void mac3(LimbSpan<T> acc, LimbSpan<const T> b, LimbSpan<const T> c) {
-  // todo: optimize when b or c have least significant zero limbs
-  auto [x, y] = b.size() < c.size() ? std::tie(b, c) : std::tie(c, b);
-  // now x is the not-longer of the two
-  for (unsigned int i = 0; i < x.size(); ++i) {
-    mac_limb(acc.subspan(i), y, x[i]);
-  }
-}
-
 template <typename T>
 std::vector<T> mul(std::span<const T> a, std::span<const T> b);
 
 template <typename T>
-std::vector<T> long_multiplication(std::span<const T> a, std::span<const T> b) {
-  std::vector<T> new_limbs(a.size() + b.size() + 1);
-  mac3<T>(new_limbs, a, b);
-  shrink_limbs(new_limbs);
-  return new_limbs;
+T add(T a, T b, T& carry) {
+  DoubleLimb<T> c = DoubleLimb<T>{a} + b;
+  carry = c >> (sizeof(T) * 8);
+  return static_cast<T>(c);
+}
+
+template <typename T>
+T mul(T a, T b, T&out) {
+  DoubleLimb<T> res = static_cast<DoubleLimb<T>>(a) * static_cast<DoubleLimb<T>>(b);
+  out = res >> (sizeof(T) * 8);
+  return static_cast<T>(res);
+}
+
+template <typename T>
+std::vector<T> conv_multiplication(std::span<const T> a, std::span<const T> b) {
+  // Slightly better grade school multiplication algorithm.
+  // In c = a * b, we write to c[i] once, looping over a[j] * b[i - j] forall j.
+  // We keep track of c[i + 1]'s incoming sum (`next`) via carries out of c[i],
+  // as well as the carry out of c[i + 1] (`next_carry`).
+  // The idea is from V8's bigint implementation.
+  std::vector<T> c;
+  c.resize(a.size() + b.size());
+  T next, x, next_carry = 0, carry = 0, high;
+  if (a.size() == 0 || b.size() == 0) return c; 
+
+  c[0] = mul(a[0], b[0], next);
+  size_t i = 1;
+  auto body = [&](int min, int max) {
+    for (int j = min; j <= max; ++j) {
+      T low = mul(a[j], b[i - j], high);
+      T carrybit;
+      x = add(x, low, carrybit);
+      carry += carrybit;
+      next = add(next, high, carrybit);
+      next_carry += carrybit;
+    }
+    c[i] = x;
+  };
+  if (i < b.size()) {
+    x = next;
+    next = 0;
+    body(0, 1);
+    ++i;
+  }
+
+  for (; i < b.size(); i++) {
+    x = add(next, carry, carry);
+    next = next_carry + carry;
+    carry = 0;
+    next_carry = 0;
+    body(0, i);
+  }
+
+
+  size_t loop_end = a.size() + b.size() - 2;
+  for (; i <= loop_end; i++) {
+    int max_x_index = std::min(i, a.size() - 1);
+    int max_y_index = b.size() - 1;
+    int min_x_index = i - max_y_index;
+    x = add(next, carry, carry);
+    next = next_carry + carry;
+    carry = 0;
+    next_carry = 0;
+    body(min_x_index, max_x_index);
+  }
+
+  c[i] = add(next, carry, carry);
+  assert (carry == 0);
+  while (i >= 0 && c[i] == 0) --i;
+  c.erase(c.begin() + i + 1, c.end());
+  return c;
 }
 
 template <typename T>
@@ -324,7 +347,8 @@ std::vector<T> mul(std::span<const T> a, std::span<const T> b) {
   }
   int minlen = b.size();
   if (minlen < KARATSUBA_THRESHOLD) {
-    return long_multiplication(a, b);
+    //return long_multiplication(a, b);
+    return conv_multiplication(a, b);
   } else {
     return karatsuba(a, b);
   }
@@ -395,9 +419,6 @@ std::pair<num<T>, num<T>> num<T>::quot_rem(const num<T>& d) const {
 }
 
 template <typename T>
-num<T>::num() = default;
-
-template <typename T>
 num<T>::num(T limb) {
   if (limb) chunks = {limb};
 }
@@ -458,7 +479,6 @@ num<T> operator*(const num<T>& x, const num<T>& y) {
   template num<T> operator*(const num<T>&, const num<T>&);                  \
   template num<T>& num<T>::sub(const num<T>&);                              \
   template std::pair<num<T>, num<T>> num<T>::quot_rem(const num<T>&) const; \
-  template num<T>::num();                                                   \
   template num<T>::num(T);                                                  \
   template num<T>::num(std::string_view);                                   \
   template std::string num<T>::dump() const;                                \
